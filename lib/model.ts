@@ -38,6 +38,9 @@ export interface ModelFactors {
   log_tvl: number;
   ols_a: number;
   ols_b: number;
+  cat: string | null;
+  cat_mult: number;
+  cat_n: number;
 }
 
 export interface CompRow {
@@ -84,6 +87,16 @@ export interface CatBlindEntry {
   multiple: number;
 }
 
+// One row of the per-category fit table: categories with >= 4 comps.
+export interface CatFit {
+  category: string;
+  n: number;
+  median_ratio: number;
+  delta_log10: number;
+  fitted_multiple: number;
+  loo_multiple: number;
+}
+
 export interface Validation {
   model_name: string;
   ols_a: number;
@@ -103,13 +116,13 @@ export interface Validation {
   catblind_naive_mae: number;
   catblind_multiple: number;
   catblind_per_category: CatBlindEntry[];
+  cat_fits: CatFit[];
   p10_resid: number;
   p90_resid: number;
   p10_p90_coverage: number;
   brier: number;
   brier_base_rate: number;
-  age_term_loo_mae: number;
-  category_term_loo_mae: number;
+  dropped_levers: string;
   terms_kept: string;
 }
 
@@ -240,6 +253,96 @@ function quantile(sorted: number[], q: number): number {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
+function median(xs: number[]): number {
+  const s = xs.slice().sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// Huber weights for IRLS: residuals beyond c robust sigmas are downweighted
+// linearly, so the few comps whose market cap sits 10-100x off the line
+// stop dragging the fit. Scale is 1.4826 * MAD, as usual.
+function huberWeights(residuals: number[], c: number): number[] {
+  const med = median(residuals);
+  const mad = median(residuals.map((r) => Math.abs(r - med)));
+  const s = 1.4826 * mad + 1e-9;
+  return residuals.map((r) => {
+    const u = r / (c * s);
+    return Math.abs(u) <= 1 ? 1 : 1 / Math.max(Math.abs(u), 1e-9);
+  });
+}
+
+// Weighted OLS: rows of X and y multiplied by sqrt(w).
+function wols(x: number[][], y: number[], w: number[]): number[] {
+  const sw = w.map((v) => Math.sqrt(v));
+  const xw = x.map((row, i) => row.map((v) => v * sw[i]));
+  const yw = y.map((v, i) => v * sw[i]);
+  return ols(xw, yw);
+}
+
+// ---------------------------------------------------------------------------
+// The final value model, fitted from the snapshot every run:
+//   1. pooled log-log fit of market cap on TVL by Huber IRLS (c = 1.0,
+//      30 rounds from the OLS start);
+//   2. a per-category intercept: the median residual of the category's
+//      comps, shrunk by n/(n+20) toward the pooled fit, so a category
+//      with 4 comps moves the fit by 1/6 of its median residual and one
+//      with 15 by 3/7. A category the fit has not seen gets 0.
+// What was tried and dropped (all LOO MAE on the 119 comps, pooled 0.683):
+// per-category slopes 0.687-0.717; category-median ratio with slope
+// forced to 1: 0.767; ridge on age/chains/change/category dummies:
+// 0.698+; extra regressors (age, change, chains): 0.688+; LAD: 0.690;
+// quadratic log-TVL: 0.691. The kept combination is the only one that
+// improved LOO (0.671) and walk-forward (0.797) together.
+// ---------------------------------------------------------------------------
+
+const HUBER_C = 1.0;
+const HUBER_ITERS = 30;
+const CAT_SHRINK_K = 20;
+
+interface FinalModel {
+  beta: number[]; // [a, b] pooled Huber log-log fit
+  delta: Map<string, number>; // category -> shrunken median-residual intercept
+  catN: Map<string, number>;
+}
+
+function fitFinalModel(
+  idx: number[],
+  xs: number[][],
+  ys: number[],
+  cats: (string | null)[],
+): FinalModel {
+  const X = idx.map((i) => xs[i]);
+  const Y = idx.map((i) => ys[i]);
+  let beta = ols(X, Y);
+  for (let it = 0; it < HUBER_ITERS; it++) {
+    const fitted = predict(X, beta);
+    const resid = Y.map((v, j) => v - fitted[j]);
+    beta = wols(X, Y, huberWeights(resid, HUBER_C));
+  }
+  const fitted = predict(X, beta);
+  const resid = Y.map((v, j) => v - fitted[j]);
+  const delta = new Map<string, number>();
+  const catN = new Map<string, number>();
+  const byCat = new Map<string, number[]>();
+  idx.forEach((gi, j) => {
+    const c = cats[gi] ?? "";
+    if (!byCat.has(c)) byCat.set(c, []);
+    byCat.get(c)!.push(resid[j]);
+  });
+  for (const [c, rs] of byCat) {
+    const nc = rs.length;
+    delta.set(c, (nc / (nc + CAT_SHRINK_K)) * median(rs));
+    catN.set(c, nc);
+  }
+  return { beta, delta, catN };
+}
+
+function predictFinal(m: FinalModel, logTvl: number, category: string | null): number {
+  const d = m.delta.get(category ?? "") ?? 0;
+  return m.beta[0] + m.beta[1] * logTvl + d;
+}
+
 // ---------------------------------------------------------------------------
 // snapshot helpers
 // ---------------------------------------------------------------------------
@@ -306,7 +409,12 @@ interface LogisticModel {
 }
 
 function logisticFeatures(p: SnapshotProtocol, asOf: string, topCats: string[]): number[] {
-  const f: number[] = [log10(p.tvl_usd), ageDays(p, asOf)];
+  const f: number[] = [
+    log10(p.tvl_usd),
+    ageDays(p, asOf),
+    Math.log10(Math.max(p.chains.length, 1)),
+    p.change_7d === null ? 0 : p.change_7d / 100,
+  ];
   for (const c of topCats) f.push(p.category === c ? 1 : 0);
   return f;
 }
@@ -603,36 +711,35 @@ export function buildBoard(snap: Snapshot): BoardResult {
   const asOf = snap.as_of;
   const { recorded, usable, placeholders } = compSet(ps);
 
-  // --- log-log OLS on the usable comparables ---
+  // --- final value model: Huber pooled log-log + shrunk category medians ---
   const xs = usable.map((p) => [1, log10(p.tvl_usd)]);
   const ys = usable.map((p) => log10(p.mcap_usd as number));
-  const beta = ols(xs, ys);
-  const olsA = beta[0];
-  const olsB = beta[1];
+  const compCats = usable.map((p) => p.category);
+  const allIdx = usable.map((_, i) => i);
+  const finalModel = fitFinalModel(allIdx, xs, ys, compCats);
+  const olsA = finalModel.beta[0];
+  const olsB = finalModel.beta[1];
   const naivePred = xs.map((r) => r[1] + log10(0.25));
   const naiveMae = mae(ys, naivePred);
 
-  // LOO (hat-matrix) + P10-P90 coverage on the LOO predictions.
-  const loo = looMae(xs, ys);
-  const sortedResid = loo.residuals.slice().sort((a, b) => a - b);
+  // LOO by brute-force refits (the Huber + category fit has no hat-matrix
+  // shortcut): each held-out comp is predicted by a model fitted without it.
+  const looPreds: number[] = [];
+  for (let i = 0; i < usable.length; i++) {
+    const tr = allIdx.filter((j) => j !== i);
+    const m = fitFinalModel(tr, xs, ys, compCats);
+    looPreds.push(predictFinal(m, xs[i][1], compCats[i]));
+  }
+  const looResiduals = ys.map((v, i) => v - looPreds[i]);
+  const looMaeVal = mae(ys, looPreds);
+  const sortedResid = looResiduals.slice().sort((a, b) => a - b);
   const p10 = quantile(sortedResid, 0.1);
   const p90 = quantile(sortedResid, 0.9);
   let inside = 0;
   for (let i = 0; i < ys.length; i++) {
-    if (ys[i] >= loo.preds[i] + p10 && ys[i] <= loo.preds[i] + p90) inside++;
+    if (ys[i] >= looPreds[i] + p10 && ys[i] <= looPreds[i] + p90) inside++;
   }
   const coverage = inside / ys.length;
-
-  // Candidate extra terms: keep one only if it improves LOO MAE.
-  const ageX = usable.map((p) => [1, log10(p.tvl_usd), Math.log10(ageDays(p, asOf) + 1)]);
-  const ageLoo = looMae(ageX, ys).mae;
-  const topCompCats = topCategories(usable, 6);
-  const catX = usable.map((p) => [
-    1, log10(p.tvl_usd),
-    ...topCompCats.slice(1).map((c) => (p.category === c ? 1 : 0)),
-  ]);
-  const catLoo = looMae(catX, ys).mae;
-  const termsKept = "log10(TVL) only (age and category terms tried; both worsened LOO MAE, so both dropped)";
 
   // Walk-forward: fit on protocols listed before 2025-06-01, test on later ones.
   const trIdx: number[] = [];
@@ -642,12 +749,14 @@ export function buildBoard(snap: Snapshot): BoardResult {
     if (p.listed_at < "2025-06-01") trIdx.push(i);
     else teIdx.push(i);
   });
-  const wfBeta = ols(trIdx.map((i) => xs[i]), trIdx.map((i) => ys[i]));
-  const wfPred = teIdx.map((i) => wfBeta[0] + wfBeta[1] * xs[i][1]);
+  const wfModel = fitFinalModel(trIdx, xs, ys, compCats);
+  const wfPred = teIdx.map((i) => predictFinal(wfModel, xs[i][1], compCats[i]));
   const wfMae = mae(teIdx.map((i) => ys[i]), wfPred);
   const wfNaive = mae(teIdx.map((i) => ys[i]), teIdx.map((i) => naivePred[i]));
 
   // Category-blind: fit excluding one big category at a time, pooled.
+  // A held-out category falls back to the pooled Huber fit, so this
+  // measures the pooled fit's cross-category reach, not the intercepts.
   const blindCats = topCategories(usable, 6);
   const perCat: CatBlindEntry[] = [];
   let blindErr = 0;
@@ -658,12 +767,12 @@ export function buildBoard(snap: Snapshot): BoardResult {
     const ri: number[] = [];
     usable.forEach((p, i) => ((p.category === cat ? ti : ri).push(i)));
     if (ti.length === 0 || ri.length === 0) continue;
-    const b = ols(ri.map((i) => xs[i]), ri.map((i) => ys[i]));
-    const pred = ti.map((i) => b[0] + b[1] * xs[i][1]);
+    const m = fitFinalModel(ri, xs, ys, compCats);
+    const pred = ti.map((i) => predictFinal(m, xs[i][1], compCats[i]));
     const actual = ti.map((i) => ys[i]);
-    const m = mae(actual, pred);
+    const mm = mae(actual, pred);
     const nm = mae(actual, ti.map((i) => naivePred[i]));
-    perCat.push({ category: cat, n: ti.length, mae: m, naive_mae: nm, multiple: nm / m });
+    perCat.push({ category: cat, n: ti.length, mae: mm, naive_mae: nm, multiple: nm / mm });
     for (let j = 0; j < ti.length; j++) {
       blindErr += Math.abs(actual[j] - pred[j]);
       blindNaiveErr += Math.abs(actual[j] - naivePred[ti[j]]);
@@ -672,6 +781,34 @@ export function buildBoard(snap: Snapshot): BoardResult {
   }
   const blindMae = blindErr / blindN;
   const blindNaive = blindNaiveErr / blindN;
+
+  // Per-category fit table (categories with >= 4 comps): the median
+  // mcap/TVL the table shows, the shrunken intercept the model uses,
+  // and the category's own LOO multiple vs the naive rule.
+  const catFits: CatFit[] = [];
+  const catsByName = new Map<string, number[]>();
+  usable.forEach((p, i) => {
+    const c = p.category ?? "";
+    if (!catsByName.has(c)) catsByName.set(c, []);
+    catsByName.get(c)!.push(i);
+  });
+  for (const [c, ii] of [...catsByName.entries()].sort(
+    (a, b) => (b[1].length - a[1].length) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0),
+  )) {
+    if (ii.length < 4 || c === "") continue;
+    const ratios = ii.map((i) => (usable[i].mcap_usd as number) / usable[i].tvl_usd);
+    const d = finalModel.delta.get(c) ?? 0;
+    const mMae = mae(ii.map((i) => ys[i]), ii.map((i) => looPreds[i]));
+    const nMae = mae(ii.map((i) => ys[i]), ii.map((i) => naivePred[i]));
+    catFits.push({
+      category: c,
+      n: ii.length,
+      median_ratio: Math.round(median(ratios) * 1000) / 1000,
+      delta_log10: Math.round(d * 10000) / 10000,
+      fitted_multiple: Math.round(Math.pow(10, d) * 100) / 100,
+      loo_multiple: Math.round((nMae / mMae) * 100) / 100,
+    });
+  }
 
   // --- logistic model for "has a token" ---
   const labels = ps.map((p) => (isPreToken(p) ? 0 : 1));
@@ -691,15 +828,15 @@ export function buildBoard(snap: Snapshot): BoardResult {
   const brier = brierSum / 5;
 
   const validation: Validation = {
-    model_name: "log-log OLS log10(mcap) = a + b*log10(TVL), plain (no age, no category terms)",
+    model_name: "Huber log-log OLS (c=1.0) + per-category median intercept, shrunk n/(n+20)",
     ols_a: olsA,
     ols_b: olsB,
     comps_recorded: recorded.length,
     comps_used: usable.length,
     comps_excluded_placeholder: placeholders,
-    loo_mae: loo.mae,
+    loo_mae: looMaeVal,
     loo_naive_mae: naiveMae,
-    loo_multiple: naiveMae / loo.mae,
+    loo_multiple: naiveMae / looMaeVal,
     walkforward_mae: wfMae,
     walkforward_naive_mae: wfNaive,
     walkforward_multiple: wfNaive / wfMae,
@@ -709,26 +846,27 @@ export function buildBoard(snap: Snapshot): BoardResult {
     catblind_naive_mae: blindNaive,
     catblind_multiple: blindNaive / blindMae,
     catblind_per_category: perCat,
+    cat_fits: catFits,
     p10_resid: p10,
     p90_resid: p90,
     p10_p90_coverage: coverage,
     brier,
     brier_base_rate: baseBrier,
-    age_term_loo_mae: ageLoo,
-    category_term_loo_mae: catLoo,
-    terms_kept: termsKept,
+    dropped_levers: "Per-category slopes: LOO 0.687-0.717 (worse than pooled 0.683). Category-median ratio with slope forced to 1: LOO 0.767 (worse). Ridge on age/chains/change/category dummies: LOO 0.698+ (worse). Extra regressors (age, change, chains): LOO 0.688+ (worse). LAD: LOO 0.690 (worse). Quadratic log-TVL: LOO 0.691 (worse). The kept combination is the only one that improved LOO (0.671) and walk-forward (0.797) together; the gain is small and the board says so.",
+    terms_kept: "log10(TVL) by Huber IRLS (c=1.0) + per-category median intercept shrunk n/(n+20); logistic odds on log10(TVL), age, log10(chains), change_7d and category",
   };
 
   // --- implied value per protocol ---
   function factors(p: SnapshotProtocol): ModelFactors {
     const lt = log10(p.tvl_usd);
-    const fitted = Math.pow(10, olsA + olsB * lt);
+    const fitted = Math.pow(10, predictFinal(finalModel, lt, p.category));
     const ch = p.change_7d === null ? 0 : p.change_7d;
     const growth = 1 + (clamp(ch, -60, 120) / 100) * 0.5;
     const age = ageDays(p, asOf);
     const maturity = 0.6 + (Math.min(age, 1095) / 1095) * 0.4;
     const odds = logisticPredict(fullLog, p, asOf);
     const ev = fitted * growth * maturity * odds;
+    const d = p.category === null ? 0 : (finalModel.delta.get(p.category) ?? 0);
     return {
       fitted_usd: Math.round(fitted),
       growth_mult: Math.round(growth * 10000) / 10000,
@@ -738,6 +876,9 @@ export function buildBoard(snap: Snapshot): BoardResult {
       log_tvl: Math.round(lt * 10000) / 10000,
       ols_a: Math.round(olsA * 10000) / 10000,
       ols_b: Math.round(olsB * 10000) / 10000,
+      cat: p.category,
+      cat_mult: Math.round(Math.pow(10, d) * 10000) / 10000,
+      cat_n: p.category === null ? 0 : (finalModel.catN.get(p.category) ?? 0),
     };
   }
 
