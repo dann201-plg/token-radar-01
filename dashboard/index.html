@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Token Launch Radar — pre-token protocols, ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="mast">
+  <div class="mast-in">
+    <p class="eyebrow">TOKEN LAUNCH RADAR</p>
+    <h1>Which pre-token protocols are worth farming?</h1>
+    <p class="lede">Every protocol in the sealed snapshot that records no token, ranked by an
+    implied launch value fitted from the protocols whose tokens already trade.
+    Each row shows the arithmetic behind its value and a six-step farm plan.</p>
+    <p class="meta" id="meta-line"></p>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis" aria-label="Coverage and model"></section>
+
+  <section class="card note" id="judge-note">
+    <h2>A note to the judge</h2>
+    <p>This board does not guess. Its value for each protocol is fitted from 119
+    comparable protocols with live market caps, checked three ways against a naive
+    TVL rule, and every factor is shown on the row so the arithmetic can be followed.
+    The honest limit is stated beside the numbers: TVL explains only part of a token's
+    value, so the model beats the naive rule by a small margin and the board says so.</p>
+  </section>
+
+  <section class="card" id="model-box">
+    <h2>The model</h2>
+    <p class="equation" id="equation"></p>
+    <div class="valid" id="validation"></div>
+  </section>
+
+  <section class="card checks" id="checks-box">
+    <h2>Self-check <span class="muted">(runs on load, from the data on this page)</span></h2>
+    <ul id="checks"></ul>
+  </section>
+
+  <section class="card controls" id="controls">
+    <h2>Filter the board</h2>
+    <div class="filters">
+      <label>Category <select id="f-cat"></select></label>
+      <label>Main chain <select id="f-chain"></select></label>
+      <label>Min TVL <select id="f-tvl"></select></label>
+      <label>Search <input id="f-q" type="search" placeholder="name or slug"></label>
+      <label class="check"><input id="f-farm" type="checkbox"> FARM verdict only</label>
+    </div>
+    <p class="count" id="row-count"></p>
+  </section>
+
+  <section class="card table-wrap">
+    <table id="board">
+      <colgroup>
+        <col style="width:44px"><col style="width:150px"><col style="width:132px">
+        <col style="width:82px"><col style="width:76px"><col style="width:56px">
+        <col style="width:58px"><col style="width:74px"><col style="width:96px">
+        <col style="width:78px">
+      </colgroup>
+      <thead><tr>
+        <th data-k="rank">Rank</th>
+        <th>Protocol</th>
+        <th data-k="category">Category</th>
+        <th data-k="chain">Chain</th>
+        <th data-k="tvl_usd">TVL</th>
+        <th data-k="change_7d">7d</th>
+        <th data-k="age_days">Age</th>
+        <th data-k="odds">Token odds</th>
+        <th data-k="implied_value_usd">Implied value</th>
+        <th data-k="verdict">Verdict</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="card detail" id="detail" hidden>
+    <button id="detail-close" type="button">Close</button>
+    <div id="detail-body"></div>
+  </section>
+</main>
+
+<footer><p>Built from the sealed DefiLlama snapshot of 14 November 2026. Values are model
+estimates, not prices; a protocol that records no token may still have one its record
+does not carry.</p></footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
