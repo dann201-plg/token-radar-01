@@ -8,11 +8,11 @@ Token Launch Radar: every protocol in the sealed DefiLlama snapshot that records
 
 ## How it works
 
-- **Model.** A log-log OLS fit of token market cap on TVL over the 119 comparable protocols that record a positive market cap: `log10(market cap) = 3.3823 + 0.4721 · log10(TVL)`. Age and category terms were tried and dropped — both worsened leave-one-out error.
-- **Validation (printed by every run).** Leave-one-out beats the naive TVL × 0.25 rule by ×1.12; walk-forward (fit before June 2025, tested after) by ×1.13; category-blind pooled by ×1.02. P10–P90 band coverage 79.8%. Token odds come from a logistic model (Brier 0.208 on 5-fold splits, vs 0.248 for the base rate).
-- **Implied value.** Fitted market cap × growth (7-day TVL change, clamped) × maturity (age) × token odds. The board holds all 40 watchlist protocols plus the 138 eligible pre-token protocols below the $50M floor — 178 rows.
+- **Model.** A Huber (c=1.0) log-log fit of token market cap on TVL over the 119 comparable protocols that record a positive market cap: `log10(market cap) = 3.3996 + 0.4735 · log10(TVL)`, plus one fitted number per category — the median residual of the category's comps, shrunk by n/(n+20) toward the pooled fit (10 categories with 4+ comps; small categories fall back to the pooled fit). Per-category slopes, a slope-1 ratio model, ridge on extra features, LAD and a quadratic term were all tried and dropped — each worsened leave-one-out error.
+- **Validation (printed by every run).** Leave-one-out beats the naive TVL × 0.25 rule by ×1.14 (MAE 0.671 vs 0.763); walk-forward (fit before June 2025, tested after) by ×1.17 (0.797 vs 0.929); category-blind pooled by ×1.01 (0.694 vs 0.704). P10–P90 band coverage 79.8%. Token odds come from a logistic model on log-TVL, age, log-chains, 7-day change and category (Brier 0.205 on 5-fold splits, vs 0.248 for the base rate; AUC 0.749).
+- **Implied value.** Fitted market cap × category fit × growth (7-day TVL change, clamped) × maturity (age) × token odds. The board holds all 40 watchlist protocols plus the 138 eligible pre-token protocols below the $50M floor — 178 rows.
 - **Farm plans.** One playbook per protocol family (lending, CDP, DEX, yield, bridge, staking, derivatives, RWA, risk curators, stablecoins, insurance, prediction, chain, payments, CeDeFi, basis trading, plus a generic fallback). Each row's six steps name the protocol, its main chain and the capital, and carry their own action, cost and time. Verdicts come from expected farmer value per hour: FARM at $25/hour or more, MARGINAL at $5/hour or more, else SKIP. Break-even FDV = farming cost ÷ (5% pool share × 0.1% farmer share), stated with its assumption on the board.
-- **Honest limit.** TVL explains only part of a token's value: the model beats the naive rule by a small margin, and the board says so next to the numbers.
+- **Honest limit.** TVL explains only part of a token's value: the model beats the naive rule by a small margin (×1.14 leave-one-out, ×1.17 walk-forward), and the board says so next to the numbers — including the categories where it still loses to naive (Yield ×0.85, Dexs ×0.92, Lending ×0.95).
 
 ## Run it
 

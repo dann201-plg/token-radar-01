@@ -70,14 +70,15 @@ function main(): void {
 
   const v = result.validation;
   console.log(`snapshot as_of=${snap.as_of} protocols=${snap.protocols.length} watchlist=${snap.watchlist.length} floor=$${snap.floor_usd}`);
-  console.log(`model: log10(mcap) = ${v.ols_a.toFixed(4)} + ${v.ols_b.toFixed(4)}*log10(TVL)`);
+  console.log(`model: ${v.model_name}; log10(mcap) = ${v.ols_a.toFixed(4)} + ${v.ols_b.toFixed(4)}*log10(TVL) + category median intercept`);
   console.log(`comps: ${v.comps_used} usable of ${v.comps_recorded} recorded (${v.comps_excluded_placeholder} carry a 0/-1 placeholder mcap and cannot enter a log fit)`);
   console.log(`validation: LOO MAE ${v.loo_mae.toFixed(4)} vs naive ${v.loo_naive_mae.toFixed(4)} -> x${v.loo_multiple.toFixed(2)}`);
   console.log(`validation: walk-forward MAE ${v.walkforward_mae.toFixed(4)} vs naive ${v.walkforward_naive_mae.toFixed(4)} -> x${v.walkforward_multiple.toFixed(2)} (train ${v.walkforward_train}, test ${v.walkforward_test})`);
   console.log(`validation: category-blind pooled MAE ${v.catblind_mae.toFixed(4)} vs naive ${v.catblind_naive_mae.toFixed(4)} -> x${v.catblind_multiple.toFixed(2)}`);
   console.log(`validation: P10-P90 band [${v.p10_resid.toFixed(3)}, ${v.p90_resid.toFixed(3)}] coverage ${(v.p10_p90_coverage * 100).toFixed(1)}%`);
   console.log(`validation: logistic Brier ${v.brier.toFixed(4)} (base rate ${v.brier_base_rate.toFixed(4)})`);
-  console.log(`validation: age term LOO ${v.age_term_loo_mae.toFixed(4)}, category terms LOO ${v.category_term_loo_mae.toFixed(4)} — both dropped, plain log-log kept`);
+  console.log(`validation: category fits: ${v.cat_fits.map((c) => `${c.category} n=${c.n} fitted x${c.fitted_multiple.toFixed(2)} LOO x${c.loo_multiple.toFixed(2)}`).join("; ")}`);
+  console.log(`validation: dropped levers: ${v.dropped_levers}`);
   console.log(`board: ${result.rows.length} rows (${result.counts.watchlist} watchlist + ${result.counts.early_rows} early), top implied $${result.rows[0].implied_value_usd.toLocaleString("en-US")}`);
 
   mkdirSync(outDir, { recursive: true });
