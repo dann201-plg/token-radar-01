@@ -34,7 +34,7 @@
   // ---- header, KPIs, model box -------------------------------------------
   document.getElementById("meta-line").textContent =
     "Snapshot " + meta.as_of + " · floor " + fmtUsd(meta.floor_usd) +
-    " · " + meta.counts.protocols + " protocols · model v1 (log-log OLS)";
+    " · " + meta.counts.protocols + " protocols · model v2 (Huber log-log + category fits)";
 
   var farmCount = rows.filter(function (r) { return r.verdict === "FARM"; }).length;
   var margCount = rows.filter(function (r) { return r.verdict === "MARGINAL"; }).length;
@@ -50,7 +50,7 @@
 
   document.getElementById("equation").textContent =
     "log10(market cap) = " + v.ols_a.toFixed(4) + " + " + v.ols_b.toFixed(4) +
-    " · log10(TVL)      fitted value = 10^(a + b·log10(TVL)) × growth × maturity × token odds";
+    " · log10(TVL) + category fit      fitted value = 10^(a + b·log10(TVL) + category) × growth × maturity × token odds";
 
   document.getElementById("validation").innerHTML =
     val("Leave-one-out", "MAE " + v.loo_mae.toFixed(3) + " vs naive " + v.loo_naive_mae.toFixed(3), "beats naive ×" + v.loo_multiple.toFixed(2)) +
@@ -58,11 +58,28 @@
     val("Category-blind", "pooled MAE " + v.catblind_mae.toFixed(3) + " vs naive " + v.catblind_naive_mae.toFixed(3), "beats naive ×" + v.catblind_multiple.toFixed(2)) +
     val("P10–P90 band", "[" + v.p10_resid.toFixed(2) + ", " + v.p90_resid.toFixed(2) + "] in log10(market cap)", "coverage " + (v.p10_p90_coverage * 100).toFixed(0) + "%") +
     val("Token odds", "logistic Brier " + v.brier.toFixed(3), "base rate " + v.brier_base_rate.toFixed(3)) +
-    val("Terms kept", "log10(TVL) only", "age and category terms worsened LOO, so dropped");
+    val("Terms kept", "Huber log-log + category medians", "slopes, ridge and extra terms worsened LOO, so dropped");
 
   function val(a, b, c) {
     return "<div><b>" + esc(a) + "</b><br>" + esc(b) + "<br>" + esc(c) + "</div>";
   }
+
+  // Per-category fit table: the evidence behind the category adjustment.
+  document.getElementById("catfits").innerHTML =
+    '<table class="catfits"><tr><th>Category</th><th>Comps</th><th>Median mcap/TVL</th>' +
+    '<th>Fitted multiple</th><th>LOO multiple</th></tr>' +
+    v.cat_fits.map(function (c) {
+      return "<tr><td>" + esc(c.category) + "</td><td>" + c.n + "</td><td>" +
+        c.median_ratio.toFixed(3) + "</td><td>×" + c.fitted_multiple.toFixed(2) +
+        "</td><td>×" + c.loo_multiple.toFixed(2) + "</td></tr>";
+    }).join("") + "</table>";
+  var losing = v.cat_fits.filter(function (c) { return c.loo_multiple < 1; })
+    .sort(function (a, b) { return a.loo_multiple - b.loo_multiple; });
+  document.getElementById("catfits-note").textContent =
+    "Fitted multiple: the factor the category's fit applies to the pooled value at the same TVL. " +
+    "LOO multiple: the category's own leave-one-out MAE against the naive TVL × 0.25 rule — " +
+    "the model still loses on " + losing.map(function (c) { return c.category + " (×" + c.loo_multiple.toFixed(2) + ")"; }).join(", ") + ". " +
+    "Small categories fall back to the pooled fit.";
 
   // ---- self-checks ---------------------------------------------------------
   function runChecks() {
@@ -200,12 +217,13 @@
       "token status: records no token</p>" +
       '<div class="dgrid"><div><h4>Model breakdown</h4><table>' +
       "<tr><td>Fitted market cap from TVL</td><td>" + fmtInt(m.fitted_usd) + "</td></tr>" +
+      "<tr><td>Category fit (" + esc(m.cat || "pooled") + ", " + m.cat_n + " comps)</td><td>× " + m.cat_mult.toFixed(2) + "</td></tr>" +
       "<tr><td>Growth multiplier (7d change)</td><td>× " + m.growth_mult.toFixed(2) + "</td></tr>" +
       "<tr><td>Maturity multiplier (age)</td><td>× " + m.maturity_mult.toFixed(2) + "</td></tr>" +
       "<tr><td>Token odds (logistic)</td><td>" + (m.odds * 100).toFixed(1) + "%</td></tr>" +
       "<tr><td><b>Expected value</b></td><td><b>" + fmtInt(m.ev_usd) + "</b></td></tr>" +
       "<tr><td>Implied value (rounded)</td><td><b>" + fmtInt(r.implied_value_usd) + "</b></td></tr>" +
-      "<tr><td>Equation</td><td class=\"mono\">10^(" + m.ols_a.toFixed(2) + " + " + m.ols_b.toFixed(2) + "·" + m.log_tvl.toFixed(2) + ")</td></tr>" +
+      "<tr><td>Equation</td><td class=\"mono\">10^(" + m.ols_a.toFixed(2) + " + " + m.ols_b.toFixed(2) + "·" + m.log_tvl.toFixed(2) + ") × " + m.cat_mult.toFixed(2) + "</td></tr>" +
       "</table><h4 style=\"margin-top:14px\">Farmer economics</h4><table>" +
       "<tr><td>Verdict</td><td><b>" + r.verdict + "</b></td></tr>" +
       "<tr><td>Expected farmer value</td><td>" + fmtInt(r.expected_value_usd) + "</td></tr>" +

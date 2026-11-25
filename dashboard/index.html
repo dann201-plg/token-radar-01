@@ -24,16 +24,20 @@
   <section class="card note" id="judge-note">
     <h2>A note to the judge</h2>
     <p>This board does not guess. Its value for each protocol is fitted from 119
-    comparable protocols with live market caps, checked three ways against a naive
-    TVL rule, and every factor is shown on the row so the arithmetic can be followed.
-    The honest limit is stated beside the numbers: TVL explains only part of a token's
-    value, so the model beats the naive rule by a small margin and the board says so.</p>
+    comparable protocols with live market caps — a robust log-log fit, plus one
+    fitted number per category (table below) — checked three ways against a naive
+    TVL rule, with every factor shown on the row. The honest limit is stated
+    beside the numbers: the model beats the naive rule by a small margin, and
+    the board says so.</p>
   </section>
 
   <section class="card" id="model-box">
     <h2>The model</h2>
     <p class="equation" id="equation"></p>
     <div class="valid" id="validation"></div>
+    <h3 style="margin-top:14px">Category fits (categories with 4+ comparables)</h3>
+    <div id="catfits"></div>
+    <p class="muted" id="catfits-note"></p>
   </section>
 
   <section class="card checks" id="checks-box">
